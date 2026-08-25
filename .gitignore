@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+articles/
+
+# API key. Never commit this.
+.env

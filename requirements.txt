@@ -1,0 +1,6 @@
+trafilatura
+brotli
+zstandard
+openai
+textual
+feedparser

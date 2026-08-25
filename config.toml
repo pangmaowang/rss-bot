@@ -1,0 +1,65 @@
+# Where exported .md files go. Priority: $GRAB_OUT, then this, then ./articles.
+out = "~/Documents/rss"
+
+# Save the Chinese translation rather than the original. Costs 20 to 60 seconds per
+# article; a failed translation saves the original instead of losing it. The o and t
+# keys are unaffected: o always previews the original, t always translates.
+translate = true
+
+# Which endpoint translation talks to. Any OpenAI-compatible /chat/completions works,
+# so OpenRouter, DeepSeek, SiliconFlow, and a local vLLM are all a one-line change.
+# The key does not belong in this file, which is in git. Put it in the .env next to it:
+#   cp .env.example .env && chmod 600 .env && vi .env
+# For a one-off: GRAB_API_KEY=sk-xxx rss --read --zh <URL>. The environment wins.
+api_base = "https://openrouter.ai/api/v1"
+# Measured on one long jvns article, five models, blind scoring plus a format check
+# (2026-08-21):
+#   model                       score  format  first  total    per article  10/day/month
+#   deepseek/deepseek-v4-flash    19     ok     2.2s   18.1s   $0.0053        $1.6   <- chosen
+#   qwen/qwen3.7-flash            18     ok    26.7s   35.5s   $0.0000        $0
+#   qwen/qwen3.5-plus-02-15       16     ok   111.2s  117.0s   $0.0271        $8.1
+#   moonshotai/kimi-k2.5          15     bad   37.4s  106.2s   $0.1955       $58.7   <- 10x list price
+#   z-ai/glm-4.7-flash            12     bad   30.1s  103.2s   $0.0057        $1.7
+# "bad" means the heading or code-fence count did not match the source: glm invented
+# three code blocks (20 -> 26), kimi lost a code block and a heading. fix_fences() only
+# rescues a stray single fence, not an invented pair. The timings are one sample through
+# OpenRouter's routing and move around; the scores and the format check are stable.
+model = "deepseek/deepseek-v4-flash"
+
+# Feeds, one per line, using a subset of newsboat's urls syntax:
+#   "https://xxx/feed"                plain
+#   'https://xxx/feed "~My title"'    override the name shown in the list
+#   'https://xxx/feed "~Title" ai'    a trailing bare word is a tag, used by rotate below
+feeds = [
+  # untagged, so they show every day
+  "https://news.ycombinator.com/rss",
+  "https://lobste.rs/rss",
+  # ai: people writing analysis or real engineering, not vendor announcements.
+  # Cut: OpenAI official (press releases, and its news and blog feeds are identical),
+  # AI News/smol.ai (699 items, rows of "not much happened today"), Latent Space
+  # (podcast transcripts plus reposted AINews), Google/DeepMind official (launch posts).
+  'https://simonwillison.net/atom/everything/ "~Simon Willison" ai',
+  'https://www.interconnects.ai/feed "~Interconnects" ai',
+  'https://magazine.sebastianraschka.com/feed "~Ahead of AI" ai',
+  'https://lilianweng.github.io/index.xml "~Lilian Weng" ai',
+  'https://jack-clark.net/feed "~Import AI" ai',
+  'https://www.seangoedecke.com/rss.xml "~Sean Goedecke" ai',
+  'https://eugeneyan.com/rss/ "~Eugene Yan" ai',
+  'https://vickiboykis.com/index.xml "~Vicki Boykis" ai',
+  'https://newsletter.maartengrootendorst.com/feed "~Exploring LMs" ai',
+  'https://machinelearning.apple.com/rss.xml "~Apple ML Research" ai',
+  'https://pytorch.org/blog/feed.xml "~PyTorch" ai',
+  'https://bair.berkeley.edu/blog/feed.xml "~BAIR" ai',
+  # eng
+  'https://danluu.com/atom.xml "~Dan Luu" eng',
+  'https://jvns.ca/atom.xml "~Julia Evans" eng',
+  'https://blog.cloudflare.com/rss/ "~Cloudflare" eng',
+  'https://fly.io/blog/feed.xml "~Fly.io" eng',
+  'https://tailscale.com/blog/index.xml "~Tailscale" eng',
+  'https://netflixtechblog.com/feed "~Netflix Tech" eng',
+]
+
+# Rotation: show one tag group per day, ai today and eng tomorrow, for when there is
+# more than you can read. Untagged feeds show every day and read state is unaffected.
+# Comment this line out to show everything.
+rotate = ["ai", "eng"]
