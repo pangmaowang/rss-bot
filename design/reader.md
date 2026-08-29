@@ -64,9 +64,22 @@ displays and navigates.
 ## Deliberately absent
 
 Filter expressions, podboat, Google Reader sync, OPML, and the rest of the
-newsboat config language. Never used them. `/` search, in-article highlighting,
-and per-feed refresh are not here either, but each is a few dozen lines if the
-need shows up.
+newsboat config language. Never used them. In-article highlighting and per-feed
+refresh are not here either, but each is a few dozen lines if the need shows up.
+
+## Title filter
+
+`/` in the article list opens an input; every keystroke narrows the table.
+The text is split on spaces and a title must contain every word, in any order,
+case-insensitively — `rust async` finds "Async Rust in practice". No regex, no
+ranking: the list keeps its date order. Enter keeps the filter and returns to
+the list, Esc clears it, and `/` always starts a blank search. The filter is a
+view over `load()`, not a query change: `a` ticks exactly the visible rows, so
+`/` + `a` + `b` exports this feed's matches. The selection itself stays
+app-wide as ever — `b` also exports whatever was ticked in other feeds, and
+`u` clears all of it. Per-screen state, dies when you leave the feed. Not a
+config DSL by design — newsboat's filter language is the thing this reader
+deleted.
 
 ## Known trade-offs
 
@@ -76,3 +89,7 @@ need shows up.
   limit. Fine for tens, split the batch for hundreds.
 - Single instance only. Two processes writing one sqlite file is not worth
   supporting.
+- Fetches do not retry connect timeouts (and feed refresh does not retry reads
+  either; the article path keeps one read retry): a dead host costs one timeout
+  per round instead of four, and a feed on a flaky network fails a round rather
+  than retrying — the hourly refresh picks it up.

@@ -134,9 +134,14 @@ def extract(url: str) -> tuple[str, str] | None:
     # Not trafilatura.fetch_url: its zstd path chokes on streaming frames, either
     # raising without a content-size or passing compressed bytes straight through.
     # urllib3 decodes gzip/br/zstd as a stream (needs brotli + zstandard installed).
+    # Retry(3, connect=0, read=1): follow redirects, but a dead host costs one
+    # timeout, not four — the default Retry multiplies every hang by its retries.
+    # One read retry stays: a mid-response drop counts as a read error, and for a
+    # user-initiated fetch or a background export a second try beats a lost article.
     resp = urllib3.request(
         "GET", url, timeout=30.0,
-        headers={"User-Agent": UA})
+        headers={"User-Agent": UA},
+        retries=urllib3.Retry(3, connect=0, read=1))
     if resp.status >= 400:
         return None
     html = resp.data                             # bytes; lxml honours the declared encoding
@@ -229,7 +234,15 @@ def api_key() -> str | None:
     could then read it, and that file often syncs to a dotfiles repo. The environment
     variable is for one-off overrides. The key only ever travels in an HTTP header,
     never in argv, so it stays out of `ps`."""
-    if key := os.getenv("GRAB_API_KEY"):
+    def usable(v: str) -> str | None:
+        # "sk-or-v1-" is the unfilled .env.example placeholder, not a key: sending
+        # it buys a provider 401 instead of the "needs GRAB_API_KEY" message. The
+        # environment path needs the same guard — `source .env` is a common way to
+        # load the file, and it exports the placeholder verbatim.
+        v = v.strip().strip("\"'")
+        return v if v not in ("", "sk-or-v1-") else None
+
+    if key := usable(os.getenv("GRAB_API_KEY") or ""):
         return key
     for path in config_paths():
         env = path.parent / ".env"
@@ -238,7 +251,7 @@ def api_key() -> str | None:
         for line in env.read_text(encoding="utf-8").splitlines():
             name, sep, value = line.strip().partition("=")
             if sep and name.strip() == "GRAB_API_KEY":
-                return value.strip().strip("\"'") or None
+                return usable(value)
     return None
 
 
@@ -506,10 +519,14 @@ def grab(url: str, out_dir: Path, title: str | None = None, zh: bool = False) ->
         try:
             doc = translate(doc)
             # The model reorders the header, typically moving the H1 below the source
-            # line, so do not trust its layout: eat the leading run of H1 / source /
-            # rule / blank, take the H1 as the filename, and rebuild with document().
-            # Anchored at \A, so a --- separator inside the article survives.
-            if head := re.match(r"(?:\s*(?:#\s+.+|>\s*Source:.*|-{3,})\s*\n)+", doc):
+            # line, so do not trust its layout: eat the leading run of source / rule /
+            # blank lines plus at most ONE H1, take that H1 as the filename, and
+            # rebuild with document(). One H1 only, because a second heading belongs
+            # to the body — `# 引言` right after the separator must survive. Anchored
+            # at \A, so a --- separator deeper inside the article survives too.
+            if head := re.match(r"(?:\s*(?:>\s*Source:.*|-{3,})\s*\n)*"
+                                r"(?:\s*#\s+.+\s*\n)?"
+                                r"(?:\s*(?:>\s*Source:.*|-{3,})\s*\n)*", doc):
                 if m := re.search(r"^#\s+(.+)$", head[0], re.M):
                     title = m[1].strip()
                     doc = document(title, url, doc[head.end():].strip())
@@ -517,9 +534,17 @@ def grab(url: str, out_dir: Path, title: str | None = None, zh: bool = False) ->
             # The text is already in hand; a failed translation saves the original
             print(f"{stamp()}{e} — saving the original: {url}", file=sys.stderr)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = unique(out_dir / f"{slugify(title)}.md")
-    path.write_text(doc, encoding="utf-8")
-    return path
+    while True:
+        path = unique(out_dir / f"{slugify(title)}.md")
+        try:
+            # "x": the parallel --bg processes race unique(), and a plain write lets
+            # the loser truncate the winner. Exclusive create makes it take the next
+            # name instead.
+            with path.open("x", encoding="utf-8") as f:
+                f.write(doc)
+        except FileExistsError:
+            continue
+        return path
 
 
 def main() -> None:
@@ -592,14 +617,16 @@ def main() -> None:
         except Exception as e:                      # one failure must not end the batch
             print(f"{stamp()}✗ Fetch error {url}: {e}", file=sys.stderr, flush=True)
             if bg:
-                notify("✗ Export failed", f"{name}\n{e}")
+                # notify() caps the body at 120 chars, so cap the title separately
+                # or a long one crowds the failure reason out of the notification
+                notify("✗ Export failed", f"{name[:60]}\n{e}")
             failed += 1
             continue
         if path is None:
             print(f"{stamp()}✗ No article text (anti-bot?) — open it manually: {url}",
                   file=sys.stderr, flush=True)
             if bg:
-                notify("✗ No article text", f"{name}\nAnti-bot, maybe — try opening it manually")
+                notify("✗ No article text", f"{name[:60]}\nAnti-bot, maybe — try opening it manually")
             failed += 1
         else:
             print(f"{stamp()}{'✓ ' if bg else ''}{path}", flush=True)   # goes to grab.log under --bg

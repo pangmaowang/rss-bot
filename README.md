@@ -16,7 +16,7 @@ A terminal RSS reader built to my own taste. Careful UI, small feature set, two 
 - **Reads in the terminal.** Type `rss` anywhere. No browser, no daemon, no sync account.
 - **Fetches the real article.** RSS summaries are close to useless, so `o` pulls the full page and renders it in place.
 - **Translates with an LLM.** `t` streams a Chinese translation. First words in 2 to 4 seconds.
-- **Ten keys, no config DSL.**
+- **Eleven keys, no config DSL.**
 - **Textual UI.** Streaming markdown, tables, code blocks, syntax highlighting.
 - **Exports to Markdown.** Select a batch, press `b`, clean `.md` files land in your notes folder.
 
@@ -46,6 +46,7 @@ Any OpenAI-compatible `/chat/completions` endpoint works, so OpenRouter, DeepSee
 | `o` | fetch the full article, render in place |
 | `t` | fetch, then stream a Chinese translation |
 | `w` | open in the system browser |
+| `/` | filter by title — every space-separated word must match; Enter keeps it, Esc clears it |
 | space | select or deselect, cursor moves down |
 | `a` / `u` | select all in this feed / clear the selection |
 | `b` | export the selection in the background |

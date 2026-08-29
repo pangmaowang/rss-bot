@@ -232,8 +232,11 @@ def fetch(url: str, etag: str = "", lastmodified: int = 0):
     if lastmodified:
         headers["If-Modified-Since"] = time.strftime(
             "%a, %d %b %Y %H:%M:%S GMT", time.gmtime(lastmodified))
-    # 15s: a thread worker cannot be cancelled, so quitting waits out a whole round
-    resp = urllib3.request("GET", url, timeout=15.0, headers=headers)
+    # 15s: a thread worker cannot be cancelled, so quitting waits out a whole round.
+    # Retry(3, connect=0, read=0) keeps redirects but not the default connect/read
+    # retries, which turn that 15s straggler into 60s (measured on a dead feed).
+    resp = urllib3.request("GET", url, timeout=15.0, headers=headers,
+                           retries=urllib3.Retry(3, connect=0, read=0))
     if resp.status >= 400:
         raise RuntimeError(f"HTTP {resp.status}")
     parsed = feedparser.parse(resp.data if resp.status == 200 else b"")
@@ -307,7 +310,7 @@ from textual.binding import Binding              # noqa: E402
 from textual.containers import VerticalScroll    # noqa: E402
 from textual.screen import Screen                # noqa: E402
 from textual.worker import WorkerError           # noqa: E402
-from textual.widgets import DataTable, Footer, Markdown  # noqa: E402
+from textual.widgets import DataTable, Footer, Input, Markdown  # noqa: E402
 
 RELOAD_MINUTES = 60                  # newsboat's reload-time; nobody ever changed it
 
@@ -336,6 +339,7 @@ Screen * {
 }
 Footer { background: #1c1c1c; }
 Footer .footer--key { color: #5fd7d7; }
+#filter { background: #1c1c1c; color: #d0d0d0; border: none; height: 1; margin: 0 2; padding: 0 1; }
 """
 
 UNREAD, READ, MARK = "bold #d0d0d0", "#585858", "#5fd7d7 bold"
@@ -486,6 +490,8 @@ class ArticlesScreen(Screen):
         ("t", "chinese", "Chinese"),
         ("w", "browser", "Browser"),
         ("r", "refresh", "Refresh"),
+        ("slash", "filter", "Filter"),
+        Binding("escape", "clear_filter", show=False),
         Binding("left", "back", priority=True, show=False),
         Binding("right", "open", priority=True, show=False),
     ]
@@ -494,11 +500,15 @@ class ArticlesScreen(Screen):
         super().__init__()
         self.feedurl = feedurl
         self.rows: dict[str, sqlite3.Row | dict] = {}   # str(id) -> row (a dict once read)
+        self.terms: tuple[str, ...] = ()     # casefolded filter words, all must match; () = off
 
     def compose(self) -> ComposeResult:
         table = DataTable(cursor_type="row", zebra_stripes=True)
         table.add_columns("Sel", "New", "Date", "Title")
         yield table
+        box = Input(placeholder="filter titles — enter keeps it, esc clears it", id="filter")
+        box.display = False
+        yield box
         yield Footer()
 
     def on_mount(self) -> None:
@@ -510,7 +520,10 @@ class ArticlesScreen(Screen):
         table.clear()
         self.rows.clear()
         for r in items_of(self.app.conn, self.feedurl):
-            self.rows[str(r["id"])] = r
+            title = r["title"].casefold()
+            if any(t not in title for t in self.terms):
+                continue                             # filtered out: not in rows either, so
+            self.rows[str(r["id"])] = r              # a / u / b see only the visible set
             table.add_row(*self.cells(r), key=str(r["id"]))
 
     def cells(self, r) -> tuple:
@@ -602,6 +615,40 @@ class ArticlesScreen(Screen):
 
     def action_refresh(self) -> None:
         self.app.do_refresh()
+
+    # -- title filter --
+    def action_filter(self) -> None:
+        box = self.query_one(Input)
+        box.value = ""                               # each / starts a blank search: leftover
+        box.display = True                           # text would concatenate with the next query
+        box.focus()
+
+    def action_clear_filter(self) -> None:
+        box = self.query_one(Input)
+        box.display = False
+        if box.value or self.terms:
+            box.value = ""
+            # Reset and reload here, not only via the queued Changed message: the
+            # very next keypress (a, b) must already see the unfiltered rows.
+            self.terms = ()
+            self.load()
+        self.query_one(DataTable).focus()
+
+    def on_input_changed(self, ev: Input.Changed) -> None:
+        self.terms = tuple(ev.value.casefold().split())
+        self.load()
+
+    def on_input_submitted(self, _) -> None:
+        if not self.terms:
+            self.query_one(Input).display = False    # enter on an empty box just closes it
+        self.query_one(DataTable).focus()
+
+    def check_action(self, action: str, parameters) -> bool:
+        """While the filter box has focus only esc may act: left/right are priority
+        bindings and would navigate away instead of editing the text."""
+        if self.query_one(Input).has_focus:
+            return action == "clear_filter"
+        return True
 
     def on_data_table_row_selected(self, _) -> None:     # enter: the RSS summary
         self.open_reading("summary")

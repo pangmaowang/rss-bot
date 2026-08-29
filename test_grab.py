@@ -59,6 +59,11 @@ def test_stream():
     # Key lookup: the environment wins, otherwise the .env next to the config
     with mock.patch.dict(os.environ, {"GRAB_API_KEY": "sk-env"}):
         assert grab.api_key() == "sk-env"
+    # The unfilled placeholder is not a key on the environment path either:
+    # `source .env` exports it verbatim
+    with mock.patch.dict(os.environ, {"GRAB_API_KEY": "sk-or-v1-"}), \
+         mock.patch.object(grab, "config_paths", return_value=[]):
+        assert grab.api_key() is None
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / ".env").write_text(
             '# comment line\nOTHER=x\nGRAB_API_KEY="sk-from-file"\n', encoding="utf-8")
@@ -66,6 +71,18 @@ def test_stream():
              mock.patch.object(grab, "config_paths", return_value=[Path(d) / "config.toml"]):
             os.environ.pop("GRAB_API_KEY", None)
             assert grab.api_key() == "sk-from-file"        # quotes stripped, other keys skipped
+        # A copied-but-unfilled .env.example must read as "no key" so the "needs
+        # GRAB_API_KEY" message fires, not a provider 401. Copy the real file, so
+        # this breaks if the example and the guard in api_key() ever drift apart;
+        # the bare "sk-or-v1-" line covers .envs copied from the older example.
+        example = (Path(grab.__file__).parent / ".env.example").read_text(encoding="utf-8")
+        for unfilled in (example, "GRAB_API_KEY=sk-or-v1-\n"):
+            (Path(d) / ".env").write_text(unfilled, encoding="utf-8")
+            with mock.patch.dict(os.environ, {}, clear=False), \
+                 mock.patch.object(grab, "config_paths",
+                                   return_value=[Path(d) / "config.toml"]):
+                os.environ.pop("GRAB_API_KEY", None)
+                assert grab.api_key() is None, unfilled
         # No .env means None, and reading the key must not raise on its own
         with mock.patch.dict(os.environ, {}, clear=False), \
              mock.patch.object(grab, "config_paths",
@@ -249,13 +266,25 @@ def test_reader():
             self.status, self.data, self.headers = status, data, headers or {}
 
     seen = {}
-    def fake(method, url, timeout, headers):
+    def fake(method, url, timeout, headers, retries):
         seen.update(headers)
+        seen["retries"] = retries
         return Resp(304)
     with mock.patch.object(urllib3, "request", fake):
         parsed = reader.fetch("https://x/", etag='W/"abc"', lastmodified=1755000000)
     assert parsed.status == 304 and not parsed.entries
     assert seen["If-None-Match"] == 'W/"abc"' and "GMT" in seen["If-Modified-Since"]
+    # A dead feed must cost one timeout, not timeout x retries: urllib3's default
+    # Retry turns the documented 15s straggler into 60s (measured). Redirects still
+    # follow; connect and read failures do not retry on the refresh path.
+    assert seen["retries"].connect == 0 and seen["retries"].read == 0
+    with mock.patch.object(urllib3, "request",
+                           lambda m, u, timeout, headers, retries:
+                               seen.update(x_retries=retries) or Resp(500)):
+        assert grab.extract("https://x/") is None            # 4xx/5xx -> no article
+    # The article path keeps exactly one read retry: a mid-response drop counts as
+    # a read error, and for an export a second try beats a lost article.
+    assert seen["x_retries"].connect == 0 and seen["x_retries"].read == 1
     with mock.patch.object(urllib3, "request", lambda *a, **k: Resp(503)):
         try:
             reader.fetch("https://x/")
@@ -565,6 +594,58 @@ def test_reader_ui():
             table = app.screen.query_one(reader.DataTable)
             assert table.row_count == 3045
             assert big_open < 1.0, f"the large feed took {big_open:.2f}s to open"
+
+            # / filters by title as you type, case-insensitively
+            await pilot.press("/")
+            assert isinstance(app.screen.focused, reader.Input)
+            await pilot.press(*"300")
+            want = sum(1 for i in range(3045) if "300" in f"big 文章{i}")
+            assert 0 < want < 3045                   # the case discriminates
+            assert table.row_count == want, (table.row_count, want)
+            # left while typing edits the input; it must not leave the screen
+            articles_screen = app.screen
+            await pilot.press("left")
+            assert app.screen is articles_screen
+            # enter keeps the filter and hands focus back to the list
+            await pilot.press("enter")
+            assert app.screen.focused is table
+            assert table.row_count == want
+            # a operates on the filtered view: / + a + b exports one keyword
+            await pilot.press("a")
+            assert len(app.selected) == want
+            await pilot.press("a")                   # press again: deselect them
+            assert not app.selected
+            # esc clears the filter and everything comes back
+            await pilot.press("escape")
+            assert table.row_count == 3045
+            # esc while still typing must work too: it is the one action the
+            # check_action allow-list keeps open while the box has focus
+            await pilot.press("/")
+            await pilot.press(*"300")
+            assert table.row_count == want
+            await pilot.press("escape")
+            assert table.row_count == 3045
+            assert app.screen.focused is table
+            # multi-word: space-separated terms, every one must match, any order
+            await pilot.press("/")
+            await pilot.press("3", "0", "space", "9")
+            want2 = sum(1 for i in range(3045)
+                        if all(t in f"big 文章{i}" for t in ("30", "9")))
+            assert 0 < want2 < 3045                  # the case discriminates
+            assert table.row_count == want2, (table.row_count, want2)
+            await pilot.press("escape")
+            assert table.row_count == 3045
+            # / after a kept filter starts a blank search, and esc + an immediate a
+            # sees the unfiltered rows (the clear reloads synchronously, not via the
+            # queued Changed message)
+            await pilot.press("/")
+            await pilot.press(*"300", "enter")       # keep the filter
+            await pilot.press("/")
+            assert app.screen.query_one(reader.Input).value == ""
+            await pilot.press("escape", "a")
+            assert len(app.selected) == 3045, len(app.selected)
+            await pilot.press("a")
+            assert not app.selected
         return big_open
 
     with mock.patch.object(reader, "DB", dbp), \
@@ -828,6 +909,16 @@ def main():
         assert "https://a.example/1" in p1.read_text(encoding="utf-8")
         assert "https://b.example/2" in p2.read_text(encoding="utf-8")
 
+        # Parallel --bg race: unique() said the name was free but another process
+        # created it first; the exclusive create must take the next name, not
+        # overwrite the winner's file
+        taken = out / "抢先.md"
+        taken.write_text("先到的", encoding="utf-8")
+        with mock.patch.object(grab, "unique", side_effect=[taken, out / "抢先-2.md"]):
+            pr = grab.grab("https://r.example/9", out, title="抢先")
+        assert pr == out / "抢先-2.md", pr
+        assert taken.read_text(encoding="utf-8") == "先到的"
+
         # Header format: this is what a markdown reader shows as title and back link
         head = p1.read_text(encoding="utf-8").split("---")[0]
         assert head == "# 同一个标题\n\n> Source: https://a.example/1\n\n", repr(head)
@@ -844,6 +935,16 @@ def main():
         assert p4.name == "中文标题.md", p4.name
         got = p4.read_text(encoding="utf-8")
         assert got == "# 中文标题\n\n> Source: https://e.example/5\n\n---\n\n译文\n", repr(got)
+
+        # Only the single leading H1 belongs to the header: a heading that opens
+        # the body must survive the rebuild, not vanish into the eaten run
+        with mock.patch.object(grab, "translate", side_effect=lambda d:
+                               "# 标题甲\n\n> Source: https://g.example/7\n\n---\n\n# 引言\n\n正文"):
+            p6 = grab.grab("https://g.example/7", out, title="X", zh=True)
+        assert p6.name == "标题甲.md", p6.name
+        assert p6.read_text(encoding="utf-8") == \
+            "# 标题甲\n\n> Source: https://g.example/7\n\n---\n\n# 引言\n\n正文\n", \
+            repr(p6.read_text(encoding="utf-8"))
 
         # A failed translation must not lose the text already fetched: save the original
         with mock.patch.object(grab, "translate", side_effect=RuntimeError("翻译接口挂了")):

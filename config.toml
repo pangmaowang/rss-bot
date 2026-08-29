@@ -33,7 +33,6 @@ model = "deepseek/deepseek-v4-flash"
 feeds = [
   # untagged, so they show every day
   "https://news.ycombinator.com/rss",
-  "https://lobste.rs/rss",
   # ai: people writing analysis or real engineering, not vendor announcements.
   # Cut: OpenAI official (press releases, and its news and blog feeds are identical),
   # AI News/smol.ai (699 items, rows of "not much happened today"), Latent Space
@@ -50,6 +49,16 @@ feeds = [
   'https://machinelearning.apple.com/rss.xml "~Apple ML Research" ai',
   'https://pytorch.org/blog/feed.xml "~PyTorch" ai',
   'https://bair.berkeley.edu/blog/feed.xml "~BAIR" ai',
+  # ai: individual researchers people actually cite, and big-lab research blogs.
+  # Karpathy/Chip Huyen/Jay Alammar post rarely but every post travels.
+  'https://karpathy.github.io/feed.xml "~Andrej Karpathy" ai',
+  'https://huyenchip.com/feed.xml "~Chip Huyen" ai',
+  'https://jalammar.github.io/feed.xml "~Jay Alammar" ai',
+  'https://hamel.dev/index.xml "~Hamel Husain" ai',
+  'https://www.oneusefulthing.org/feed "~Ethan Mollick" ai',
+  'https://research.google/blog/rss/ "~Google Research" ai',
+  'https://www.amazon.science/index.rss "~Amazon Science" ai',
+  'https://www.microsoft.com/en-us/research/feed/ "~Microsoft Research" ai',
   # eng
   'https://danluu.com/atom.xml "~Dan Luu" eng',
   'https://jvns.ca/atom.xml "~Julia Evans" eng',
@@ -57,6 +66,20 @@ feeds = [
   'https://fly.io/blog/feed.xml "~Fly.io" eng',
   'https://tailscale.com/blog/index.xml "~Tailscale" eng',
   'https://netflixtechblog.com/feed "~Netflix Tech" eng',
+  # eng: independent names and big-company engineering blogs. All verified to
+  # fetch and parse on 2026-08-29; Uber (406/404) and colah (dead since 2019)
+  # did not make the cut, lobste.rs cut as one aggregator is enough.
+  'https://antirez.com/rss "~antirez" eng',
+  'https://mitchellh.com/feed.xml "~Mitchell Hashimoto" eng',
+  'https://blog.pragmaticengineer.com/rss/ "~Pragmatic Engineer" eng',
+  'https://martinfowler.com/feed.atom "~Martin Fowler" eng',
+  'https://engineering.fb.com/feed/ "~Meta Engineering" eng',
+  'https://github.blog/engineering/feed/ "~GitHub Engineering" eng',
+  'https://stripe.com/blog/feed.rss "~Stripe" eng',
+  'https://slack.engineering/feed/ "~Slack Engineering" eng',
+  'https://engineering.atspotify.com/feed "~Spotify Engineering" eng',
+  'https://dropbox.tech/feed "~Dropbox Tech" eng',
+  'https://medium.com/feed/airbnb-engineering "~Airbnb Engineering" eng',
 ]
 
 # Rotation: show one tag group per day, ai today and eng tomorrow, for when there is
