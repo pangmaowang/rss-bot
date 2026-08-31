@@ -503,6 +503,38 @@ def test_reader_ui():
             await pilot.press("a")
             await pilot.press("a")
             assert not app.selected
+            # b works from the feed list too: the selection accumulates across
+            # feeds, so backing out must not strand it
+            await pilot.press("a")
+            assert len(app.selected) == 2
+            await pilot.press("left")
+            assert isinstance(app.screen, reader.FeedsScreen)
+            exported.clear()
+            await pilot.press("b")
+            assert {t for _, t in exported} == {"f2 文章0", "f2 文章1"}, exported
+            assert not app.selected
+            feed_notes = []
+            with mock.patch.object(type(app), "notify",
+                                   lambda self, msg, **kw: feed_notes.append(str(msg))):
+                await pilot.press("b")                   # empty selection: say so
+            assert any("Nothing selected" in n for n in feed_notes), feed_notes
+            # u clears from the feed list too: a failed-start orphan must not be
+            # stuck once its feed no longer shows
+            app.selected["orphan"] = ("https://gone/x", "孤儿")
+            await pilot.press("u")
+            assert not app.selected
+            await pilot.press("down", "right")           # back into the second feed
+            assert isinstance(app.screen, reader.ArticlesScreen)
+            # No selection: b exports the cursor row, and a failed start leaves
+            # it ticked for a retry like any other row
+            exported.clear()
+            await pilot.press("b")
+            assert len(exported) == 1 and not app.selected, (exported, app.selected)
+            with mock.patch.object(reader.grab, "export_bg", lambda items: [OSError("nope")]):
+                await pilot.press("b")
+            assert len(app.selected) == 1, app.selected
+            await pilot.press("u")                       # drop the retry candidate
+            assert not app.selected
             # r in the article list runs the same full refresh
             manual_refresh = []
             with mock.patch.object(app, "do_refresh", lambda: manual_refresh.append(1)):
@@ -585,6 +617,24 @@ def test_reader_ui():
                 await pilot.press("left")
                 await pilot.pause()
             assert [n for n in crashed if n[1] == "error"] == [("Render error: 渲染炸了", "error")], crashed
+
+            # Streaming must not drag the view to the bottom: reading starts at
+            # the top, the stream fills in below
+            with mock.patch.object(reader.grab, "extract",
+                                   lambda url: ("标题", "很长的正文段落。\n\n" * 120)):
+                await pilot.press("o")
+                reading = app.screen
+                assert isinstance(reading, reader.StreamScreen)
+                for _ in range(120):                     # let the stream finish
+                    await pilot.pause(0.05)
+                    if reading.query_one(reader.Markdown).source.count("很长的正文段落") >= 120:
+                        break
+                else:
+                    assert False, "the stream never finished"
+                scroll = reading.query_one(reader.VerticalScroll)
+                assert scroll.max_scroll_y > 0, "content too short to prove anything"
+                assert scroll.scroll_offset.y == 0, scroll.scroll_offset
+                await pilot.press("left")
 
             # Performance: time opening the 3045-row feed
             await pilot.press("left", "down", "down", "right")
@@ -690,8 +740,13 @@ def test_stream_md():
     from textual.app import App
     from textual.widgets import Markdown
 
+    notes = []
+
     def render(produce, stop=None):
         class T(App):
+            def notify(self, message, **kw):     # capture toasts instead of rendering
+                notes.append(str(message))
+
             def compose(self):
                 yield Markdown()
 
@@ -715,15 +770,19 @@ def test_stream_md():
                 return app.query_one(Markdown).source
         return asyncio.run(drive())
 
-    # Normal stream: fragments reassemble in order
+    # Normal stream: fragments reassemble in order, and no toast fires
     out = render(lambda: iter(["# 标题\n\n", "正文一。\n"]))
     assert "# 标题" in out and "正文一。" in out, out
-    # A producer that dies mid-way shows the error once instead of waiting forever
+    assert not notes, notes
+    # A producer that dies mid-way shows the error once instead of waiting forever,
+    # and ALSO toasts it: the in-document warning lands at the end of the text,
+    # below the fold now that reading starts at the top
     def boom():
         yield "开头。\n"
         raise AttributeError("lxml 那边的意外")   # any exception, not only RuntimeError
     out = render(boom)
     assert out.count("⚠️") == 1 and "lxml 那边的意外" in out, out
+    assert any("lxml 那边的意外" in n for n in notes), notes
     # Empty output: render nothing, still finish cleanly
     assert render(lambda: iter([])) == ""
     # Stop: nothing more renders and the producer stops, or translation keeps billing
@@ -737,7 +796,9 @@ def test_stream_md():
 
     stop = threading.Event()
     threading.Timer(0.25, stop.set).start()
+    notes.clear()
     out = render(forever, stop)
+    assert not notes, notes                       # a stop is not an error: no toast
     n = len(made)
     time_.sleep(0.3)
     assert len(made) <= n + 1, (n, len(made))     # the producer stopped, one tick of slack

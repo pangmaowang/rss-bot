@@ -389,6 +389,7 @@ async def stream_md(md, produce, stop=None) -> None:
 
     stop = stop or threading.Event()
     q = queue.SimpleQueue()
+    err = []
 
     def run():
         try:
@@ -397,7 +398,8 @@ async def stream_md(md, produce, stop=None) -> None:
                     break
                 q.put(piece)
         except Exception as e:               # catch everything: a dead producer posts no
-            q.put(f"\n\n> ⚠️ {e}\n")     # sentinel and the renderer waits forever
+            err.append(e)                    # sentinel and the renderer waits forever
+            q.put(f"\n\n> ⚠️ {e}\n")
         finally:
             q.put(None)
 
@@ -428,6 +430,10 @@ async def stream_md(md, produce, stop=None) -> None:
             await asyncio.sleep(TICK)
     finally:
         await stream.stop()
+        if err and not stop.is_set():
+            # The in-document warning lands at the end of the text, below the fold
+            # now that reading starts at the top; a toast is visible from anywhere.
+            md.notify(f"⚠️ {err[0]}", severity="warning")
 
 
 def read_zh(doc: str) -> None:
@@ -451,7 +457,7 @@ def read_zh(doc: str) -> None:
             yield Footer()
 
         def on_mount(self):
-            self.query_one(VerticalScroll).anchor()   # follow the bottom, release on scroll up
+            # No anchor(): reading starts at the top, the stream fills in below.
             self.stream_it()
 
         def on_unmount(self):

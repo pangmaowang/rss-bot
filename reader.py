@@ -430,7 +430,7 @@ class StreamScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one(VerticalScroll).anchor()   # follow the bottom, release on scroll up
+        # No anchor(): reading starts at the top, the stream fills in below.
         self.stream_worker = self.stream_it()
 
     def on_unmount(self) -> None:
@@ -573,28 +573,11 @@ class ArticlesScreen(Screen):
             self.repaint(r)
 
     def action_export(self) -> None:
-        """Hand the selection, or the cursor row if nothing is selected, to grab.
-        The UI only starts the work: fetching, translating, writing, logging, and
-        notifying all happen in the --bg processes and nothing comes back here."""
-        items = list(self.app.selected.values())
-        if not items and (r := self.current()):
-            items = [(r["url"], r["title"])]
-        if not items:
-            return
-        guids = list(self.app.selected)          # same order as items, which are its values
-        try:
-            errs = grab.export_bg(items)         # matches items by index; None means started
-        except OSError as e:                     # the log will not open, so nothing started
-            self.notify(f"Export could not start: {e}", severity="error")
-            return
-        # By index, not by comparing (url, title): the same story on two feeds is identical
-        for guid, err in zip(guids, errs):
-            if err is None:
-                del self.app.selected[guid]      # started, so drop it; failures stay for a retry
-        if started := sum(1 for e in errs if e is None):
-            self.notify(f"{started} queued for background export")
-        if broke := [e for e in errs if e is not None]:
-            self.notify(f"{len(broke)} could not start: {broke[0]}", severity="error")
+        """Tick the cursor row when nothing is selected, then export: a failed
+        start leaves it selected for a retry, like any other row."""
+        if not self.app.selected and (r := self.current()):
+            self.app.selected[r["guid"]] = (r["url"], r["title"])
+        self.app.export_selected()
         for row in self.rows.values():
             self.repaint(row)
 
@@ -679,6 +662,8 @@ class FeedsScreen(Screen):
     BINDINGS = [
         ("q", "quit_app", "Quit"),
         ("r", "refresh", "Refresh"),
+        ("b", "export", "Export"),
+        ("u", "clear", "Clear"),
         Binding("left", "noop", priority=True, show=False),
         Binding("right", "open", priority=True, show=False),
     ]
@@ -723,6 +708,15 @@ class FeedsScreen(Screen):
     def action_refresh(self) -> None:
         self.app.do_refresh()
 
+    def action_export(self) -> None:
+        self.app.export_selected()
+
+    def action_clear(self) -> None:
+        """u here too: a failed-start orphan whose feed no longer shows would
+        otherwise be stuck in the selection with no way to drop it."""
+        self.app.selected.clear()
+        self.notify("Selection cleared")
+
     def action_quit_app(self) -> None:
         self.app.exit()
 
@@ -746,6 +740,29 @@ class Reader(App):
         self.push_screen(FeedsScreen())
         self.set_interval(RELOAD_MINUTES * 60, self.do_refresh)
         self.do_refresh()
+
+    def export_selected(self) -> None:
+        """Hand the accumulated selection to grab, dropping what started; both
+        lists bind b here. The UI only starts the work: fetching, translating,
+        writing, logging, and notifying all happen in the --bg processes and
+        nothing comes back."""
+        picked = list(self.selected.items())     # (guid, (url, title)): one order for
+        if not picked:                           # the export and the drop below
+            self.notify("Nothing selected")
+            return
+        try:
+            errs = grab.export_bg([item for _, item in picked])
+        except OSError as e:                     # the log will not open, so nothing started
+            self.notify(f"Export could not start: {e}", severity="error")
+            return
+        # By index, not by comparing (url, title): the same story on two feeds is identical
+        for (guid, _), err in zip(picked, errs):
+            if err is None:
+                del self.selected[guid]          # started, so drop it; failures stay for a retry
+        if started := sum(1 for e in errs if e is None):
+            self.notify(f"{started} queued for background export")
+        if broke := [e for e in errs if e is not None]:
+            self.notify(f"{len(broke)} could not start: {broke[0]}", severity="error")
 
     @work(thread=True, group="refresh", exit_on_error=False)
     def do_refresh(self) -> None:

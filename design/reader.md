@@ -52,7 +52,21 @@ to RFC822 first. `RFC822ISH` decides which is which. Two rare cases still
 differ and are accepted: RSS2 feeds carrying a non-RFC822 date, and `<id>`
 elements with an `xml:base`.
 
+## Selection and export
+
+The selection (guid -> (url, title)) lives on the app and accumulates across
+feeds. `b` hands it to background export and drops what started; failures stay
+selected for a retry. Both lists bind `b` — the feed list too, so backing out
+does not strand a selection — and `u` clears it from either. With nothing
+selected, `b` in the article list ticks the cursor row first and exports that,
+so a failed start leaves it selected like any other row.
+
 ## Reading view
+
+The view stays at the top while a stream fills in below: reading starts at the
+beginning, not at the newest output, so there is no bottom-anchoring. A
+producer that dies mid-stream therefore also toasts its error — the
+in-document warning lands at the end of the text, below the fold.
 
 `o` and `t` swap modes in place rather than pushing a new screen. Switching or
 leaving cancels the old producer cooperatively: Python threads cannot be
@@ -76,8 +90,7 @@ ranking: the list keeps its date order. Enter keeps the filter and returns to
 the list, Esc clears it, and `/` always starts a blank search. The filter is a
 view over `load()`, not a query change: `a` ticks exactly the visible rows, so
 `/` + `a` + `b` exports this feed's matches. The selection itself stays
-app-wide as ever — `b` also exports whatever was ticked in other feeds, and
-`u` clears all of it. Per-screen state, dies when you leave the feed. Not a
+app-wide (see Selection and export). Per-screen state, dies when you leave the feed. Not a
 config DSL by design — newsboat's filter language is the thing this reader
 deleted.
 

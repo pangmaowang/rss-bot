@@ -48,8 +48,8 @@ Any OpenAI-compatible `/chat/completions` endpoint works, so OpenRouter, DeepSee
 | `w` | open in the system browser |
 | `/` | filter by title — every space-separated word must match; Enter keeps it, Esc clears it |
 | space | select or deselect, cursor moves down |
-| `a` / `u` | select all in this feed / clear the selection |
-| `b` | export the selection in the background |
+| `a` / `u` | select all in this feed / clear the selection (`u` works from the feed list too) |
+| `b` | export the selection in the background — works from the feed list too |
 | `r` | refresh every feed |
 | `q` | back one level, or quit from the feed list |
 

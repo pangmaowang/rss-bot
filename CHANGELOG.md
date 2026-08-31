@@ -8,6 +8,36 @@ is committed. This is not a release changelog.
 Entry format: one heading line (date and what you did), then the files you
 touched, how you verified it, and any risk you left behind.
 
+## 2026-08-31 — reading starts at the top; b exports from the feed list too
+
+- `reader.py` `StreamScreen.on_mount` / `grab.py` `read_zh`: dropped the
+  `VerticalScroll.anchor()` — it followed the stream to the bottom like a chat
+  log, but articles are read from the top; the view now stays put while the
+  stream fills in below.
+- `reader.py`: export moved to `Reader.export_selected()` (the selection lives
+  on the app, so exporting it does too). `FeedsScreen` gains the `b` binding —
+  a selection accumulated across feeds no longer strands when you back out —
+  and says "Nothing selected" on an empty press. `ArticlesScreen.action_export`
+  keeps the cursor-row fallback by ticking it first, so a failed start now
+  leaves it selected for a retry like any other row.
+- Docs: README key tables, design/reader.md (reading view, filter section, new
+  Selection and export section).
+- Pre-push review round (3 grouped angles) found 8 issues, all fixed here:
+  a mid-stream producer error now also toasts (`stream_md`), since the
+  in-document warning lands below the fold once nothing anchors to the bottom;
+  `export_selected` returns None with "Nothing selected" inside it, so both
+  screens give the same feedback and the bool's OSError double-meaning is gone;
+  `FeedsScreen` gained `u` (a failed-start orphan whose feed no longer shows
+  was otherwise unclearable); parallel guids/items lists became one
+  `list(selected.items())`; the duplicated rationale docstrings were trimmed;
+  the scroll test got completion + scrollability asserts and lost its
+  redundant double-wait; the cursor-fallback and feed-list `u` paths got
+  runnable checks.
+- Verified: each new check failed before its code (toast: AssertionError [],
+  feed-b: exported [], scroll: Offset(y=227) with anchor restored), suite +
+  py_compile + `git diff --check` pass after.
+- Risk: none known; no storage or fetching changes.
+
 ## 2026-08-29 — review round: nine findings fixed before commit (in 31bb709)
 
 A 9-angle review (line-scan, removed-behavior, cross-file, reuse,
